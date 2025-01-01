@@ -194,10 +194,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 # Start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("Start command received.")
-    user_id = update.message.from_user.id
     await update.message.reply_text(
-        "👋 Hi! I'm ChatZipper Bot. I'll help you catch up on group chats by summarizing unread messages. "
-        "Just use me in a group, and I'll notify you when you have more than {MESSAGE_LIMIT} unread messages!"
+        f"👋 Hi! I'm ChatZipper Bot. I'll help you catch up on group chats by summarizing unread messages. "
+        f"Just use me in a group, and I'll notify you when you have more than {MESSAGE_LIMIT} unread messages!"
     )
 
 def get_user_last_seen(user_id: int) -> datetime:
