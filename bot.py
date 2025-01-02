@@ -26,7 +26,6 @@ async def generate_summary(messages: list) -> str:
         print(f"Error generating summary: {e}")
         return "Sorry, I couldn't generate a summary at this time."
 
-
 # Set up logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -87,7 +86,6 @@ def update_user_activity(user_id: int, last_seen: datetime, last_message_id: int
         conn.close()
     except Exception as e:
         print(f"Error updating user activity: {e}")
-
 
 def get_last_summary_timestamp(user_id: int) -> datetime:
     try:
@@ -155,25 +153,42 @@ def fetch_unread_messages(user_id: int, since_timestamp: datetime) -> list:
 # Ask the user if they want a summary
 async def ask_for_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+    user_name = update.message.from_user.first_name or update.message.from_user.username
+    chat_id = update.message.chat_id
     last_summary = get_last_summary_timestamp(user_id)
     
     # If user has received a summary recently, check if there are enough new messages
     if last_summary:
         new_messages = fetch_unread_messages(user_id, last_summary)
         if len(new_messages) < MESSAGE_LIMIT:
-            await update.message.reply_text("You're already caught up! I'll notify you when there are more new messages to summarize.")
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="You're already caught up! I'll notify you when there are more new messages to summarize."
+            )
             return
 
+    # Send notification in group chat
+    if chat_id != user_id:  # Check if we're in a group chat
+        await update.message.reply_text(
+            f"Hey @{user_name}, I've sent you a private message about summarizing the unread messages. Please check your DMs!"
+        )
+
+    # Send the actual summary request in private
     keyboard = [
         [InlineKeyboardButton("Yes", callback_data="summary_yes")],
         [InlineKeyboardButton("No", callback_data="summary_no")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("You have more than {MESSAGE_LIMIT} unread messages. Would you like a summary?", reply_markup=reply_markup)
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=f"You have more than {MESSAGE_LIMIT} unread messages. Would you like a summary?",
+        reply_markup=reply_markup
+    )
 
 # Handle callback queries (Yes/No buttons)
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user_id = query.from_user.id
     await query.answer()
 
     if query.data == "summary_yes":
@@ -185,12 +200,24 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             summary = await generate_summary(messages)
             current_time = datetime.now()
             update_user_activity(user_id, current_time, query.message.message_id, current_time)
-            await query.edit_message_text(f"Here's your summary:\n\n{summary}")
+            # await query.edit_message_text(f"Here's your summary:\n\n{summary}")
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"Here's your summary:\n\n{summary}"
+            )
         else:
-            await query.edit_message_text("You're already caught up! I'll notify you when there are more new messages to summarize.")
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="You're already caught up! I'll notify you when there are more new messages to summarize."
+            )
     elif query.data == "summary_no":
-        await query.edit_message_text("Okay, let me know if you change your mind!")
-
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="Okay, let me know if you change your mind!"
+        )
+    # To clean up a little delete the original message with buttons
+    await query.message.delete()
+    
 # Start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("Start command received.")
@@ -214,11 +241,17 @@ def get_user_last_seen(user_id: int) -> datetime:
         print(f"Error getting user's last seen: {e}")
         return datetime.now() - timedelta(days=1)
 
-
 # Handle incoming messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("Message received")
     try:
+        chat_id = update.message.chat_id
+        
+        # Only process messages from allowed group chats
+        if chat_id not in config.allowed_chat_ids:
+            print(f"Message from unauthorized chat: {chat_id}")
+            return
+        
         # Sanitize user data and message text
         user_id, username, first_name = sanitize_user_data(
             update.message.from_user.id,
@@ -248,8 +281,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Error handling message: {e}")
 
-
 async def chatzip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    
+    # Only allow command in authorized chats
+    if chat_id not in config.allowed_chat_ids:
+        await update.message.reply_text("This bot is only available in specific group chats.")
+        return
+    
     user_id = update.message.from_user.id
     last_seen = get_user_last_seen(user_id)
     unread_messages = fetch_unread_messages(user_id, last_seen)
@@ -258,7 +297,6 @@ async def chatzip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ask_for_summary(update, context)
     else:
         await update.message.reply_text(f"You have {len(unread_messages)} unread messages - you're all caught up! 👍")
-
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle unknown commands."""

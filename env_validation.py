@@ -1,4 +1,4 @@
-from typing import NamedTuple
+from typing import NamedTuple, List
 from dotenv import load_dotenv
 import os
 
@@ -7,6 +7,7 @@ class EnvConfig(NamedTuple):
     openai_api_key: str
     message_limit: int
     db_path: str = 'chatzzipper.db'
+    allowed_chat_ids: List[int] = []
 
 def validate_env() -> EnvConfig:
     load_dotenv()
@@ -26,8 +27,12 @@ def validate_env() -> EnvConfig:
     except ValueError:
         raise ValueError("MESSAGE_LIMIT must be a valid integer")
     
+    allowed_chat_ids_str = os.getenv('ALLOWED_CHAT_IDS', '')
+    allowed_chat_ids = [int(id.strip()) for id in allowed_chat_ids_str.split(',')] if allowed_chat_ids_str else []
+    
     return EnvConfig(
         telegram_token=telegram_token,
         openai_api_key=openai_api_key,
-        message_limit=message_limit
+        message_limit=message_limit,
+        allowed_chat_ids=allowed_chat_ids
     )
