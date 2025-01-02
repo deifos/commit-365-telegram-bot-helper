@@ -88,7 +88,7 @@ def update_user_activity(user_id: int, last_seen: datetime, last_message_id: int
     except Exception as e:
         print(f"Error updating user activity: {e}")
 
-async def delete_message_later(message, delay_seconds=10):
+async def delete_message_later(message, delay_seconds=30):
     """Delete a message after specified delay"""
     await asyncio.sleep(delay_seconds)
     try:
@@ -270,6 +270,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if chat_id != update.message.from_user.id:  # Only auto-delete in group chats
         await delete_message_later(reply)
+        #delete users bot command.
+        await delete_message_later(update.message) 
 
 def get_user_last_seen(user_id: int) -> datetime:
     try:
@@ -331,8 +333,13 @@ async def chatzip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Only allow command in authorized chats
     if chat_id not in config.allowed_chat_ids:
-        await update.message.reply_text("This bot is only available in specific group chats.")
+        reply = await update.message.reply_text("This bot is only available in specific group chats.")
+        await delete_message_later(reply)
         return
+    
+    # Delete user's command in group chats
+    if chat_id != update.message.from_user.id:
+        await delete_message_later(update.message)
     
     user_id = update.message.from_user.id
     last_seen = get_user_last_seen(user_id)
@@ -341,7 +348,9 @@ async def chatzip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(unread_messages) > MESSAGE_LIMIT:
         await ask_for_summary(update, context)
     else:
-        await update.message.reply_text(f"You have {len(unread_messages)} unread messages - you're all caught up! 👍")
+        reply = await update.message.reply_text(f"You have {len(unread_messages)} unread messages - you're all caught up! 👍")
+        if chat_id != update.message.from_user.id:  # Only auto-delete in group chats
+            await delete_message_later(reply)
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle unknown commands."""
