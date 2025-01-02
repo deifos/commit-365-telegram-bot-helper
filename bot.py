@@ -161,7 +161,12 @@ async def ask_for_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if last_summary:
         new_messages = fetch_unread_messages(user_id, last_summary)
         if len(new_messages) < MESSAGE_LIMIT:
-            await update.message.reply_text("You're already caught up! I'll notify you when there are more new messages to summarize.")
+            # await update.message.reply_text("You're already caught up! I'll notify you when there are more new messages to summarize.")
+            # return
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="You're already caught up! I'll notify you when there are more new messages to summarize."
+            )
             return
 
     keyboard = [
@@ -169,11 +174,17 @@ async def ask_for_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("No", callback_data="summary_no")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("You have more than {MESSAGE_LIMIT} unread messages. Would you like a summary?", reply_markup=reply_markup)
+    # await update.message.reply_text("You have more than {MESSAGE_LIMIT} unread messages. Would you like a summary?", reply_markup=reply_markup)
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=f"You have more than {MESSAGE_LIMIT} unread messages. Would you like a summary?",
+        reply_markup=reply_markup
+    )
 
 # Handle callback queries (Yes/No buttons)
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user_id = query.from_user.id
     await query.answer()
 
     if query.data == "summary_yes":
@@ -185,12 +196,24 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             summary = await generate_summary(messages)
             current_time = datetime.now()
             update_user_activity(user_id, current_time, query.message.message_id, current_time)
-            await query.edit_message_text(f"Here's your summary:\n\n{summary}")
+            # await query.edit_message_text(f"Here's your summary:\n\n{summary}")
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"Here's your summary:\n\n{summary}"
+            )
         else:
-            await query.edit_message_text("You're already caught up! I'll notify you when there are more new messages to summarize.")
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="You're already caught up! I'll notify you when there are more new messages to summarize."
+            )
     elif query.data == "summary_no":
-        await query.edit_message_text("Okay, let me know if you change your mind!")
-
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="Okay, let me know if you change your mind!"
+        )
+    # To clean up a little delete the original message with buttons
+    await query.message.delete()
+    
 # Start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("Start command received.")
