@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from openai import AsyncOpenAI
 from message_sanitization import sanitize_input, sanitize_user_data
 from env_validation import validate_env
+import asyncio
 
 config  = validate_env()
 client = AsyncOpenAI(api_key=config.openai_api_key)
@@ -87,6 +88,36 @@ def update_user_activity(user_id: int, last_seen: datetime, last_message_id: int
     except Exception as e:
         print(f"Error updating user activity: {e}")
 
+async def delete_message_later(message, delay_seconds=10):
+    """Delete a message after specified delay"""
+    await asyncio.sleep(delay_seconds)
+    try:
+        await message.delete()
+    except Exception as e:
+        print(f"Error deleting message: {e}")
+
+async def chatzip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    
+    # Only allow command in authorized chats
+    if chat_id not in config.allowed_chat_ids:
+        reply = await update.message.reply_text("This bot is only available in specific group chats.")
+        await delete_message_later(reply)
+        return
+    
+    user_id = update.message.from_user.id
+    last_seen = get_user_last_seen(user_id)
+    unread_messages = fetch_unread_messages(user_id, last_seen)
+    
+    if len(unread_messages) > MESSAGE_LIMIT:
+        # The ask_for_summary function should be modified to return the sent message
+        reply = await ask_for_summary(update, context)
+        await delete_message_later(reply)
+    else:
+        reply = await update.message.reply_text(f"You have {len(unread_messages)} unread messages - you're all caught up! 👍")
+        await delete_message_later(reply)
+
+
 def get_last_summary_timestamp(user_id: int) -> datetime:
     try:
         conn = sqlite3.connect('chatzzipper.db')
@@ -161,17 +192,20 @@ async def ask_for_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if last_summary:
         new_messages = fetch_unread_messages(user_id, last_summary)
         if len(new_messages) < MESSAGE_LIMIT:
-            await context.bot.send_message(
+            reply = await context.bot.send_message(
                 chat_id=user_id,
                 text="You're already caught up! I'll notify you when there are more new messages to summarize."
             )
-            return
+            if chat_id != user_id:  # Only auto-delete in group chats
+                await delete_message_later(reply)
+            return reply
 
     # Send notification in group chat
     if chat_id != user_id:  # Check if we're in a group chat
-        await update.message.reply_text(
-            f"Hey @{user_name}, I've sent you a private message about summarizing the unread messages. Please check your DMs!"
+        reply = await update.message.reply_text(
+            f"Hey @{user_name}, I've sent you a private message about summarizing the unread messages. Please check your DMs! -This message will self-destruct in 10 seconds. do you feel like Tom Cruise now?🤣🤣🤣"
         )
+        await delete_message_later(reply)
 
     # Send the actual summary request in private
     keyboard = [
@@ -189,6 +223,7 @@ async def ask_for_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
+    chat_id = query.message.chat_id
     await query.answer()
 
     if query.data == "summary_yes":
@@ -201,30 +236,40 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             current_time = datetime.now()
             update_user_activity(user_id, current_time, query.message.message_id, current_time)
             # await query.edit_message_text(f"Here's your summary:\n\n{summary}")
-            await context.bot.send_message(
+            reply = await context.bot.send_message(
                 chat_id=user_id,
                 text=f"Here's your summary:\n\n{summary}"
             )
+            if chat_id != user_id:  # Only auto-delete in group chats
+                await delete_message_later(reply)
         else:
-            await context.bot.send_message(
+            reply = await context.bot.send_message(
                 chat_id=user_id,
                 text="You're already caught up! I'll notify you when there are more new messages to summarize."
             )
+            if chat_id != user_id:  # Only auto-delete in group chats
+                await delete_message_later(reply)
     elif query.data == "summary_no":
-        await context.bot.send_message(
+        reply = await context.bot.send_message(
             chat_id=user_id,
             text="Okay, let me know if you change your mind!"
         )
+        if chat_id != user_id:  # Only auto-delete in group chats
+            await delete_message_later(reply)
     # To clean up a little delete the original message with buttons
     await query.message.delete()
     
 # Start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("Start command received.")
-    await update.message.reply_text(
+    chat_id = update.message.chat_id
+    reply = await update.message.reply_text(
         f"👋 Hi! I'm your friendly commit365-Bot-helper. Right now the only thing I can do is help you catch up on group chats by summarizing unread messages. "
         f"You can summon me by calling /start or /chatzip to sumarize your unread chats, also I'll notify you when you have more than {MESSAGE_LIMIT} unread messages in case you want a summary! feel free to make me more useful by adding more features."
     )
+
+    if chat_id != update.message.from_user.id:  # Only auto-delete in group chats
+        await delete_message_later(reply)
 
 def get_user_last_seen(user_id: int) -> datetime:
     try:
