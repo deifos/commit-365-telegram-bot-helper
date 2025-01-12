@@ -328,6 +328,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def chatzip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
+
+    #autodelte command message
+    # if chat_id != update.message.from_user.id:
+    #     await delete_message_later(update.message)
     
     # Only allow command in authorized chats
     if chat_id not in config.allowed_chat_ids:
