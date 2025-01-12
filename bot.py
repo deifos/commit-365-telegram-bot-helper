@@ -11,6 +11,7 @@ import asyncio
 config  = validate_env()
 client = AsyncOpenAI(api_key=config.openai_api_key)
 MESSAGE_LIMIT = config.message_limit
+TIME_WINDOW_HOURS = config.time_window_hours
 
 async def generate_summary(messages: list) -> str:
     try:
@@ -73,16 +74,40 @@ def update_user_activity(user_id: int, last_seen: datetime, last_message_id: int
     try:
         conn = sqlite3.connect('chatzzipper.db')
         cursor = conn.cursor()
-        if summary_timestamp:
-            cursor.execute('''
-                INSERT OR REPLACE INTO users (user_id, last_seen, last_message_id, last_summary_timestamp)
-                VALUES (?, ?, ?, ?)
-            ''', (user_id, last_seen, last_message_id, summary_timestamp))
+        
+        # Get current values
+        cursor.execute('SELECT last_seen FROM users WHERE user_id = ?', (user_id,))
+        current = cursor.fetchone()
+        
+        if current and current[0]:
+            current_last_seen = datetime.fromisoformat(current[0])
+            # Only update if new timestamp is more recent
+            if last_seen > current_last_seen:
+                if summary_timestamp:
+                    cursor.execute('''
+                        UPDATE users 
+                        SET last_seen = ?, last_message_id = ?, last_summary_timestamp = ?
+                        WHERE user_id = ?
+                    ''', (last_seen, last_message_id, summary_timestamp, user_id))
+                else:
+                    cursor.execute('''
+                        UPDATE users 
+                        SET last_seen = ?, last_message_id = ?
+                        WHERE user_id = ?
+                    ''', (last_seen, last_message_id, user_id))
         else:
-            cursor.execute('''
-                INSERT OR REPLACE INTO users (user_id, last_seen, last_message_id)
-                VALUES (?, ?, ?)
-            ''', (user_id, last_seen, last_message_id))
+            # New user
+            if summary_timestamp:
+                cursor.execute('''
+                    INSERT INTO users (user_id, last_seen, last_message_id, last_summary_timestamp)
+                    VALUES (?, ?, ?, ?)
+                ''', (user_id, last_seen, last_message_id, summary_timestamp))
+            else:
+                cursor.execute('''
+                    INSERT INTO users (user_id, last_seen, last_message_id)
+                    VALUES (?, ?, ?)
+                ''', (user_id, last_seen, last_message_id))
+        
         conn.commit()
         conn.close()
     except Exception as e:
@@ -138,11 +163,15 @@ def store_message(chat_id: int, user_id: int, message_id: int, text: str, timest
     try:
         conn = sqlite3.connect('chatzzipper.db')
         cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO messages (message_id, chat_id, user_id, username, first_name, text, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (message_id, chat_id, user_id, username, first_name, text, timestamp))
-        conn.commit()
+        
+        # Check if message already exists
+        cursor.execute('SELECT message_id FROM messages WHERE message_id = ?', (message_id,))
+        if cursor.fetchone() is None:  # Only insert if message doesn't exist
+            cursor.execute('''
+                INSERT INTO messages (message_id, chat_id, user_id, username, first_name, text, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (message_id, chat_id, user_id, username, first_name, text, timestamp))
+            conn.commit()
         conn.close()
     except Exception as e:
         print(f"Error storing message: {e}")
@@ -153,29 +182,38 @@ def fetch_unread_messages(user_id: int, since_timestamp: datetime) -> list:
         conn = sqlite3.connect('chatzzipper.db')
         cursor = conn.cursor()
         
-        # Debug prints
-        print(f"Fetching messages for user_id: {user_id}")
-        print(f"Last seen timestamp: {since_timestamp}")
+        # Calculate the maximum allowed timestamp (10 days ago)
+        max_age = datetime.now() - timedelta(days=10)
+        # Calculate the configured time window
+        time_window_limit = datetime.now() - config.time_window
+        # Use the most recent timestamp between all constraints
+        effective_timestamp = max(since_timestamp, max_age, time_window_limit)
         
-        # First check if messages exist
-        cursor.execute('SELECT COUNT(*) FROM messages')
-        total_messages = cursor.fetchone()[0]
-        print(f"Total messages in database: {total_messages}")
+        print(f"Fetching messages for user_id: {user_id}")
+        print(f"User's last seen: {since_timestamp}")
+        print(f"Max age limit: {max_age}")
+        print(f"Time window limit: {time_window_limit}")
+        print(f"Using effective timestamp: {effective_timestamp}")
         
         cursor.execute('''
             SELECT username, first_name, text, timestamp 
             FROM messages 
-            WHERE timestamp > ? AND chat_id IN (
+            WHERE timestamp > ? 
+            AND user_id != ?  -- Exclude user's own messages
+            AND chat_id IN (
                 SELECT DISTINCT chat_id 
                 FROM messages
             )
             ORDER BY timestamp ASC
-        ''', (since_timestamp,))
+        ''', (effective_timestamp, user_id))
         
-        messages = [f"[{row[3]}] {row[1] or row[0]}: {row[2]}" for row in cursor.fetchall()]
+        messages = []
+        for row in cursor.fetchall():
+            timestamp = datetime.fromisoformat(row[3])
+            messages.append(f"[{timestamp}] {row[1] or row[0]}: {row[2]}")
+        
         conn.close()
-        print(messages)
-        print(f"Found {len(messages)} messages total")
+        print(f"Found {len(messages)} messages within the allowed time window")
         return messages
     except Exception as e:
         print(f"Error fetching unread messages: {e}")
@@ -189,33 +227,32 @@ async def ask_for_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     last_summary = get_last_summary_timestamp(user_id)
     
     # If user has received a summary recently, check if there are enough new messages
+    # within the configured time window
     if last_summary:
-        new_messages = fetch_unread_messages(user_id, last_summary)
+        earliest_timestamp = datetime.now() - config.time_window
+        effective_timestamp = max(last_summary, earliest_timestamp)
+        new_messages = fetch_unread_messages(user_id, effective_timestamp)
+        
         if len(new_messages) < MESSAGE_LIMIT:
             reply = await context.bot.send_message(
                 chat_id=user_id,
-                text="You're already caught up! I'll notify you when there are more new messages to summarize."
+                text=f"You're already caught up with messages from the last {config.time_window_hours} hours! "
+                     "I'll notify you when there are more new messages to summarize."
             )
             if chat_id != user_id:  # Only auto-delete in group chats
                 await delete_message_later(reply)
             return reply
 
-    # Send notification in group chat
-    if chat_id != user_id:  # Check if we're in a group chat
-        reply = await update.message.reply_text(
-            f"Hey @{user_name}, I've sent you a private message about summarizing the unread messages. Please check your DMs! -This message will self-destruct in 10 seconds. do you feel like Tom Cruise now?🤣🤣🤣"
-        )
-        await delete_message_later(reply)
-
-    # Send the actual summary request in private
     keyboard = [
         [InlineKeyboardButton("Yes", callback_data="summary_yes")],
         [InlineKeyboardButton("No", callback_data="summary_no")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await context.bot.send_message(
         chat_id=user_id,
-        text=f"You have more than {MESSAGE_LIMIT} unread messages. Would you like a summary?",
+        text=f"You have more than {MESSAGE_LIMIT} unread messages from the last {config.time_window_hours} hours. "
+             "Would you like a summary?",
         reply_markup=reply_markup
     )
 
@@ -275,13 +312,24 @@ def get_user_last_seen(user_id: int) -> datetime:
     try:
         conn = sqlite3.connect('chatzzipper.db')
         cursor = conn.cursor()
-        cursor.execute('SELECT last_seen FROM users WHERE user_id = ?', (user_id,))
+        cursor.execute('''
+            SELECT last_seen, last_summary_timestamp 
+            FROM users 
+            WHERE user_id = ?
+        ''', (user_id,))
         result = cursor.fetchone()
         conn.close()
         
         if result and result[0]:
-            return datetime.fromisoformat(result[0])
-        return datetime.now() - timedelta(days=1)  # Default to 24 hours ago if no record
+            # Use the most recent timestamp between last seen and last summary
+            last_seen = datetime.fromisoformat(result[0])
+            last_summary = datetime.fromisoformat(result[1]) if result[1] else None
+
+            if last_summary and last_summary > last_seen:
+                return last_summary
+            return last_seen
+        return datetime.now() - timedelta(days=1)
+   
     except Exception as e:
         print(f"Error getting user's last seen: {e}")
         return datetime.now() - timedelta(days=1)
@@ -328,28 +376,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def chatzip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
-
-    #autodelte command message
-    # if chat_id != update.message.from_user.id:
-    #     await delete_message_later(update.message)
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username
+    first_name = update.message.from_user.first_name
+    display_name = first_name or username
     
-    # Only allow command in authorized chats
+    # Chat is only allowed to specific group chats based on config. 
+    # this has to be improved to make sure the chats in the db are not mixed with other chats
     if chat_id not in config.allowed_chat_ids:
-        await update.message.reply_text("This bot is only available in specific group chats.")
+        reply = await update.message.reply_text("This bot is only available in specific group chats.")
+        await delete_message_later(reply)
         return
     
-    user_id = update.message.from_user.id
     last_seen = get_user_last_seen(user_id)
     unread_messages = fetch_unread_messages(user_id, last_seen)
     
     if len(unread_messages) > MESSAGE_LIMIT:
-        await ask_for_summary(update, context)
-    else:
-        
-        reply = await update.message.reply_text(f"You have {len(unread_messages)} unread messages - you're all caught up! 👍")
-        if chat_id != user_id:  # Only auto-delete in group chats
+        if chat_id != user_id:
+            reply = await update.message.reply_text(
+                f"Hey {display_name}! You have {len(unread_messages)} unread messages "
+                f"(maximum 10 days of history). "
+                f"I've sent you a private message to help you catch up. "
+                f"Please check your DMs! 📩\n\n"
+                f"(This message will self-destruct in 10 seconds 💥)"
+            )
             await delete_message_later(reply)
-
+            
+            keyboard = [
+                [InlineKeyboardButton("Yes", callback_data="summary_yes")],
+                [InlineKeyboardButton("No", callback_data="summary_no")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"You have {len(unread_messages)} unread messages from the last "
+                     f"{min(config.time_window_hours, 240)} hours. Would you like a summary? "
+                     f"(Note: Messages older than 10 days are not included)",
+                reply_markup=reply_markup
+            )
+        else:
+            await ask_for_summary(update, context)
+    else:
+        reply = await update.message.reply_text(
+            f"You have {len(unread_messages)} unread messages, you need at least 10 unread messages to get a summary. "
+            f"from the last {min(config.time_window_hours, 240)} hours - you're all caught up! 👍"
+        )
+        if chat_id != user_id:
+            await delete_message_later(reply)
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle unknown commands."""
