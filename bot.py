@@ -341,7 +341,11 @@ async def chatzip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(unread_messages) > MESSAGE_LIMIT:
         await ask_for_summary(update, context)
     else:
-        await update.message.reply_text(f"You have {len(unread_messages)} unread messages - you're all caught up! 👍")
+        
+        reply = await update.message.reply_text(f"You have {len(unread_messages)} unread messages - you're all caught up! 👍")
+        if chat_id != user_id:  # Only auto-delete in group chats
+            await delete_message_later(reply)
+
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle unknown commands."""
