@@ -17,7 +17,7 @@ async def generate_summary(messages: list) -> str:
     try:
         messages_text = "\n".join(messages)
         response = await client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "Summarize these chat messages concisely:"},
                 {"role": "user", "content": messages_text}
