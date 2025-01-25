@@ -6,6 +6,7 @@ from datetime import timedelta
 class EnvConfig(NamedTuple):
     telegram_token: str
     openai_api_key: str
+    firecrawl_api_key: str
     message_limit: int
     time_window_hours: int
     db_path: str = 'chatzzipper.db'
@@ -25,6 +26,10 @@ def validate_env() -> EnvConfig:
     openai_api_key = os.getenv('OPENAI_API_KEY')
     if not openai_api_key:
         raise ValueError("OPENAI_API_KEY is required")
+    
+    firecrawl_api_key = os.getenv('FIRECRAWL_API_KEY')
+    if not firecrawl_api_key:
+        raise ValueError("FIRECRAWL_API_KEY is required")
     
     try:
         message_limit = int(os.getenv('MESSAGE_LIMIT', '75'))
@@ -46,6 +51,7 @@ def validate_env() -> EnvConfig:
     return EnvConfig(
         telegram_token=telegram_token,
         openai_api_key=openai_api_key,
+        firecrawl_api_key=firecrawl_api_key,
         message_limit=message_limit,
         time_window_hours=time_window_hours,
         allowed_chat_ids=allowed_chat_ids

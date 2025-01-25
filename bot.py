@@ -1,5 +1,5 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 import sqlite3
 from datetime import datetime, timedelta
@@ -7,11 +7,14 @@ from openai import AsyncOpenAI
 from message_sanitization import sanitize_input, sanitize_user_data
 from env_validation import validate_env
 import asyncio
+from firecrawl import FirecrawlApp
+from pydantic import BaseModel
 
 config  = validate_env()
 client = AsyncOpenAI(api_key=config.openai_api_key)
 MESSAGE_LIMIT = config.message_limit
 TIME_WINDOW_HOURS = config.time_window_hours
+FIRECRAWL_API_KEY = config.firecrawl_api_key
 
 async def generate_summary(messages: list) -> str:
     try:
@@ -138,7 +141,7 @@ async def delete_message_later(message, delay_seconds=10):
 async def chatzip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     
-    # Only allow command in authorized chats
+    # Only allow command in authorized chats //I WILL MOVE THIS TO A GLOBAL CONFIG FILE
     if chat_id not in config.allowed_chat_ids:
         reply = await update.message.reply_text("This bot is only available in specific group chats.")
         await delete_message_later(reply)
@@ -156,6 +159,45 @@ async def chatzip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = await update.message.reply_text(f"You have {len(unread_messages)} unread messages - you're all caught up! 👍")
         await delete_message_later(reply)
 
+async def fetch_hn_stories() -> str:
+    try:
+        app = FirecrawlApp(api_key=FIRECRAWL_API_KEY)
+        data = app.extract([
+            'https://news.ycombinator.com/'
+        ], {
+            'prompt': 'Extract the top 3 stories with their titles, URLs, and brief summaries',
+            'schema': {
+                "type": "object",
+                "properties": {
+                    "hottest_stories": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "url": {"type": "string"},
+                                "title": {"type": "string"},
+                                "summary": {"type": "string"}
+                            },
+                            "required": ["url", "title", "summary"]
+                        }
+                    }
+                },
+                "required": ["hottest_stories"]
+            }
+        })
+        
+
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Format response with hyperlinks
+        response = "🔥 Top Stories from Hacker News:\n\n"
+        for idx, story in enumerate(data['data']['hottest_stories'][:3], 1):
+            response += f"{idx}. [{story['title']}]({story['url']})\n"
+            response += f"   {story['summary']}\n\n"
+        response += f"\n🕒 Last updated: {current_time}"
+        return response
+    except Exception as e:
+        print(f"Error fetching HN stories: {e}")
+        return "Sorry, couldn't fetch stories right now."
 
 def get_last_summary_timestamp(user_id: int) -> datetime:
     try:
@@ -439,6 +481,24 @@ async def chatzip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if chat_id != user_id:
             await delete_message_later(reply)
 
+async def whatshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    user_id = update.message.from_user.id
+
+    # Chat is only allowed to specific group chats based on config. 
+    # this has to be improved to make sure the chats in the db are not mixed with other chats
+    if chat_id not in config.allowed_chat_ids:
+        reply = await update.message.reply_text("This bot is only available in specific group chats.")
+        await delete_message_later(reply)
+        return
+    
+    reply = await update.message.reply_text("Fetching hot stories from hackernews... 🔍")
+    stories = await fetch_hn_stories()
+    # Use parse_mode=ParseMode.MARKDOWN to enable hyperlinks
+    await reply.edit_text(stories, parse_mode=constants.ParseMode.MARKDOWN, disable_web_page_preview=True)
+    
+    
+
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle unknown commands."""
     available_commands = """
@@ -446,6 +506,7 @@ Sorry, I don't recognize that command. Here are the commands I support:
 
 /start - Start the bot and get welcome message
 /chatzip - Check for unread messages and get a summary if needed
+/whatshot - Get top 3 stories from Hacker News
 
 Try one of these commands!
 """
@@ -462,6 +523,7 @@ def main():
 
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("chatzip", chatzip))
+        application.add_handler(CommandHandler("whatshot", whatshot))
         #When user enteres a command that is not recognized, it will be handled by the unknown_command function
         application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
