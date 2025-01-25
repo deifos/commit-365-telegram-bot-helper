@@ -138,27 +138,6 @@ async def delete_message_later(message, delay_seconds=10):
     except Exception as e:
         print(f"Error deleting message: {e}")
 
-async def chatzip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    
-    # Only allow command in authorized chats //I WILL MOVE THIS TO A GLOBAL CONFIG FILE
-    if chat_id not in config.allowed_chat_ids:
-        reply = await update.message.reply_text("This bot is only available in specific group chats.")
-        await delete_message_later(reply)
-        return
-    
-    user_id = update.message.from_user.id
-    last_seen = get_user_last_seen(user_id)
-    unread_messages = fetch_unread_messages(user_id, last_seen)
-    
-    if len(unread_messages) > MESSAGE_LIMIT:
-        # The ask_for_summary function should be modified to return the sent message
-        reply = await ask_for_summary(update, context)
-        await delete_message_later(reply)
-    else:
-        reply = await update.message.reply_text(f"You have {len(unread_messages)} unread messages - you're all caught up! 👍")
-        await delete_message_later(reply)
-
 async def fetch_hn_stories() -> str:
     try:
         app = FirecrawlApp(api_key=FIRECRAWL_API_KEY)
@@ -496,9 +475,7 @@ async def whatshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stories = await fetch_hn_stories()
     # Use parse_mode=ParseMode.MARKDOWN to enable hyperlinks
     await reply.edit_text(stories, parse_mode=constants.ParseMode.MARKDOWN, disable_web_page_preview=True)
-    
-    
-
+ 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle unknown commands."""
     available_commands = """
