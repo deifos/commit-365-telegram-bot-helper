@@ -19,7 +19,21 @@ async def generate_summary(messages: list) -> str:
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Summarize these chat messages concisely:"},
+                {"role": "system", "content": """Format the chat summary with consistent indentation and keep each point under 50 characters:
+
+📝 Key Topics:
+• Point 1
+• Point 2
+
+🎯 Actions/Decisions:
+• Point 1
+• Point 2
+
+👥 Notable Mentions:
+• Point 1
+• Point 2
+
+Keep points aligned and concise."""},
                 {"role": "user", "content": messages_text}
             ]
         )
