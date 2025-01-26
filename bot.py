@@ -22,22 +22,26 @@ async def generate_summary(messages: list) -> str:
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": """Format the chat summary with consistent indentation and keep each point under 50 characters:
+                {
+                    "role": "system",
+                    "content": """Summarize the chat messages concisely, maintaining a conversational tone and including who said what for context. Organize the summary into the following sections:
 
 📝 Key Topics:
-• Point 1
-• Point 2
+- Start with a brief overview of the main topics discussed.
+- Use a narrative style to explain who brought up what (e.g., "Matt mentioned his preference for Aeropress over Phin, and Szymon chimed in with his thoughts on coffee brewing techniques.").
 
 🎯 Actions/Decisions:
-• Point 1
-• Point 2
+- Highlight any decisions or actions taken, mentioning who suggested or decided what (e.g., "Szymon recommended joining Startup School, and Matt agreed to explore it further.").
 
-👥 Notable Mentions:
-• Point 1
-• Point 2
+🌟 Fun Highlights & Notable Mentions:
+- Keep this section light and conversational, mentioning fun or interesting contributions (e.g., "Vlad shared some exciting updates about Firecrawl, calling the new features '🔥'!").
 
-Keep points aligned and concise."""},
-                {"role": "user", "content": messages_text}
+Maintain a balance between structure and a natural, engaging tone."""
+                },
+                {
+                    "role": "user",
+                    "content": messages_text
+                }
             ]
         )
         return response.choices[0].message.content
